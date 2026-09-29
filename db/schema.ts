@@ -1,0 +1,12 @@
+import { sql } from 'drizzle-orm';
+import { sqliteTable, text, integer, primaryKey, check } from 'drizzle-orm/sqlite-core';
+export const users=sqliteTable('users',{id:text('id').primaryKey(),revision:integer('revision').notNull().default(0),settings:text('settings').notNull()},t=>[check('positive_revision',sql`${t.revision} >= 0`)]);
+const fields=()=>({owner:text('owner').notNull().references(()=>users.id),id:text('id').notNull(),payload:text('payload').notNull()});
+export const products=sqliteTable('products',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const categories=sqliteTable('categories',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const purchaseBatches=sqliteTable('purchase_batches',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const sales=sqliteTable('sales',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const inventoryAdjustments=sqliteTable('inventory_adjustments',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const expenses=sqliteTable('expenses',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const expenseCategories=sqliteTable('expense_categories',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);
+export const saleBatchAllocations=sqliteTable('sale_batch_allocations',fields(),t=>[primaryKey({columns:[t.owner,t.id]})]);

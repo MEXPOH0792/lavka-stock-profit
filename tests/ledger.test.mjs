@@ -1,9 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyLedger,mutate,calculate,summary,fixed,cost,today} from '../lib/ledger.ts';
+import {emptyLedger,mutate,calculate,summary,fixed,cost,today,inventoryAnalytics} from '../lib/ledger.ts';
 function base(){return mutate(emptyLedger(),{kind:'product',id:'p',name:'Финики',unit:'kg',price:'700'});}
 function buy(l,q,p,d='2026-01-01'){return mutate(l,{kind:'purchase',productId:'p',quantity:q,price:p,date:d});}
 function sell(l,q,p='700',d='2026-01-03'){return mutate(l,{kind:'sale',productId:'p',quantity:q,price:p,date:d});}
+
+const metrics=l=>inventoryAnalytics(l,'2026-01-01','2026-01-31','2026-02-01');
+test('turnover weights actual FIFO cost; markup uses sales prices, not list price',()=>{
+ let l=buy(buy(base(),'1','100'),'1','300','2026-01-06');l=sell(l,'2','400','2026-01-11');
+ const a=metrics(l),m=a.products.p;assert.equal(m.turnoverDays,6.25);assert.equal(m.markupPercent,100);assert.equal(m.stockCents,0);assert.equal(m.stale,false);assert.equal(a.groups[0].metrics.turnoverDays,6.25);
+});
+test('no sales: no fabricated turnover or markup, stock and stale state remain real',()=>{
+ const m=metrics(buy(base(),'10','100')).products.p;assert.equal(m.turnoverDays,null);assert.equal(m.markupPercent,null);assert.equal(m.stockCents,100000);assert.equal(m.staleCents,100000);assert.equal(m.stale,true);assert.equal(m.averageDailyQuantity,0);
+});
+test('unknown purchase dates suppress interval but preserve actual markup',()=>{
+ let l=mutate(base(),{kind:'opening',productId:'p',quantity:'2',price:'100',date:'2026-01-01',dateKnown:false});l=sell(l,'1','130','2026-01-06');
+ const m=metrics(l).products.p;assert.equal(m.turnoverDays,null);assert.equal(m.markupPercent,30);assert.equal(m.stale,null);assert.equal(m.staleCents,0);
+});
+test('same-day turnover and below-cost sale are valid; period excludes later sales',()=>{
+ let l=sell(buy(base(),'2','100'),'1','80','2026-01-01');l=sell(l,'1','130','2026-02-01');const m=metrics(l).products.p;assert.equal(m.turnoverDays,0);assert.equal(m.markupPercent,-20);assert.equal(m.stockCents,0);
+});
+test('groups weight cost instead of averaging percentages and do not mix quantity units',()=>{
+ let l=sell(buy(base(),'1','100'),'1','130','2026-01-06');l=mutate(l,{kind:'product',id:'p2',name:'Штучный',unit:'pcs',price:'1'});l=mutate(l,{kind:'purchase',productId:'p2',date:'2026-01-01',quantity:'1',price:'300'});l=mutate(l,{kind:'sale',productId:'p2',date:'2026-01-11',quantity:'1',price:'600'});
+ const m=metrics(l).groups[0].metrics;assert.equal(m.turnoverDays,8.75);assert.equal(m.markupPercent,82.5);assert.equal(m.averageDailyQuantity,null);
+});
+test('analytics excludes synthetic inventory dates and is safe on calculated snapshots',()=>{
+ let l=buy(base(),'1','100');l=mutate(l,{kind:'adjustment',productId:'p',quantity:'2',price:'100',reason:'Излишек'});l=sell(l,'2','130',today());
+ const a=inventoryAnalytics(l,'2000-01-01',today());assert.equal(a.products.p.turnoverDays,null);assert.deepEqual(inventoryAnalytics(calculate(l),'2000-01-01',today()),a);
+});
+test('replenishment persists through old edit payloads; invalid delivery times rejected',()=>{
+ let l=mutate(base(),{kind:'product',id:'p',name:'Финики',unit:'kg',leadTimeDays:'4',preferredSupplier:'Поставщик'});assert.equal(l.products[0].replenishment.leadTimeDays,4);
+ l=mutate(l,{kind:'product',id:'p',name:'Финики 2',unit:'kg'});assert.equal(l.products[0].replenishment.leadTimeDays,4);assert.equal(metrics(l).products.p.reorderPointQuantity,null);
+ for(const leadTimeDays of ['-1','1.5','366','NaN'])assert.throws(()=>mutate(l,{kind:'product',id:'p',name:'Финики',unit:'kg',leadTimeDays}),/Срок поставки/);
+});
 test('FIFO: 10×400 + 2×450 = 4900; revenue 8400; profit 3500',()=>{let l=buy(buy(base(),'10','400'),'10','450','2026-01-02');l=calculate(sell(l,'12'));assert.equal(l.sales[0].cost,490000);assert.equal(l.sales[0].revenue,840000);assert.equal(l.sales[0].profit,350000);assert.deepEqual(l.batches.map(b=>b.remaining),[0,8000]);assert.equal(l.allocations.length,2);});
 test('oversell rejected without mutating input',()=>{const l=buy(base(),'4.5','400');assert.throws(()=>sell(l,'6'),/Недостаточно/);assert.equal(l.sales.length,0);assert.equal(calculate(l).batches[0].remaining,4500);});
 test('money parser rejects floats, negatives, exponents and extra precision',()=>{assert.equal(fixed('123,45',2),12345);for(const s of ['-1','NaN','1e3','0','1.001','Infinity'])assert.throws(()=>fixed(s,2));assert.equal(fixed('0',2,true),0);});

@@ -15,6 +15,7 @@ test('full API flow, validation, auth, CSRF, concurrent sales and historical per
  await ok({kind:'purchase',productId:id,date:d,quantity:'10',price:'450'});
  await ok({kind:'sale',productId:id,date:d,quantity:'12',price:'700'});
  let state=await get();let s=state.ledger.sales.find(s=>s.productId===id);assert.equal(s.cost,490000);assert.equal(s.revenue,840000);
+ const metrics=state.analytics.products[id];assert.equal(metrics.turnoverDays,0);assert.equal(metrics.stockCents,360000);assert.equal(metrics.markupPercent,71.42);assert.equal(metrics.stale,false);
  assert.equal((await post({kind:'sale',productId:id,date:d,quantity:'9',price:'700'})).status,400);
  const concurrent=await Promise.all([post({kind:'sale',productId:id,date:d,quantity:'6',price:'700'},state.revision),post({kind:'sale',productId:id,date:d,quantity:'6',price:'700'},state.revision)]);
  assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);

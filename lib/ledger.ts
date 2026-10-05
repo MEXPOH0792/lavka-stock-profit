@@ -1,4 +1,5 @@
-export type Product = { id: string; name: string; category: string; unit: 'kg' | 'pcs'; price: number; archived: boolean; createdAt: string; updatedAt: string };
+export type Replenishment = { supplier: string; leadTimeDays: number | null };
+export type Product = { id: string; name: string; category: string; unit: 'kg' | 'pcs'; price: number; archived: boolean; createdAt: string; updatedAt: string; replenishment?: Replenishment };
 export type Batch = { id: string; productId: string; date: string; dateKnown: boolean; quantity: number; price: number; supplier: string; expiry: string; note: string; opening: boolean; createdAt: string; remaining?: number };
 export type Allocation = { id: string; saleId: string; batchId: string; quantity: number; price: number; cost: number };
 export type Sale = { id: string; productId: string; date: string; quantity: number; price: number; note: string; createdAt: string; revenue?: number; cost?: number; profit?: number };
@@ -38,6 +39,45 @@ export function calculate(source:Ledger, cutoff='9999-12-31'):Ledger {
 }
 export function summary(source:Ledger,from:string,to:string) {const l=calculate(source,to);const sales=l.sales.filter(s=>s.date>=from);const revenue=sales.reduce((n,s)=>n+(s.revenue??0),0),cogs=sales.reduce((n,s)=>n+(s.cost??0),0),expenses=l.expenses.filter(e=>e.date>=from&&e.date<=to).reduce((n,e)=>n+e.amount,0);return {revenue,cogs,gross:revenue-cogs,expenses,net:revenue-cogs-expenses,stock:l.batches.reduce((n,b)=>n+cost(b.remaining??0,b.price),0),purchased:source.batches.filter(b=>!b.opening&&b.date>=from&&b.date<=to).reduce((n,b)=>n+cost(b.quantity,b.price),0),loss:l.adjustments.filter(a=>a.date>=from).reduce((n,a)=>n+(a.loss??0),0)};}
 
+export type InventoryMetrics = {
+ stockCents:number; staleCents:number; stale:boolean|null;
+ turnoverDays:number|null; markupPercent:number|null;
+ soldCostCents:number; revenueCents:number; datedCostCents:number;
+ weightedDays:string; incompleteDates:boolean;
+ averageDailyQuantity:number|null; observationDays:number;
+ leadTimeDays:number|null; reorderPointQuantity:number|null; recommendedOrderQuantity:number|null;
+};
+export type InventoryAnalytics = {products:Record<string,InventoryMetrics>;groups:{name:string;metrics:InventoryMetrics}[];from:string;to:string;stockAsOf:string};
+
+// FIFO holding time, weighted by actual allocated cost. Monetary arithmetic stays integer.
+// Unknown purchase dates and inventory surpluses cannot establish a purchase-to-sale interval.
+export function inventoryAnalytics(source:Ledger,from:string,to:string,now=today(source.settings.timezone)):InventoryAnalytics {
+ const clean={...source,batches:source.batches.filter(b=>!b.id.startsWith('adjustment:'))};
+ const l=calculate(clean,now), end=to<now?to:now;
+ const batches=new Map(l.batches.map(b=>[b.id,b])), sales=new Map(l.sales.filter(s=>s.date>=from&&s.date<=end).map(s=>[s.id,s]));
+ const products:Record<string,InventoryMetrics>=Object.create(null);
+ const finish=(m:InventoryMetrics)=>{
+  m.turnoverDays=m.datedCostCents>0&&!m.incompleteDates?Number(BigInt(m.weightedDays)*100n/BigInt(m.datedCostCents))/100:null;
+  m.markupPercent=m.soldCostCents>0?Number((BigInt(m.revenueCents)-BigInt(m.soldCostCents))*10000n/BigInt(m.soldCostCents))/100:null;
+ };
+ for(const p of l.products){
+  const stock=l.batches.filter(b=>b.productId===p.id&&(b.remaining??0)>0);
+  const stale=stock.filter(b=>b.dateKnown&&!b.id.startsWith('adjustment:')&&days(b.date,now)>l.settings.staleDays);
+  const history=l.batches.filter(b=>b.productId===p.id).map(b=>b.date).sort();
+  const observationDays=history.length?Math.min(30,days(history[0],now)+1):0;
+  const recent=l.sales.filter(s=>s.productId===p.id&&days(s.date,now)<observationDays);
+  const m:InventoryMetrics={stockCents:exactSum(stock.map(b=>cost(b.remaining??0,b.price))),staleCents:exactSum(stale.map(b=>cost(b.remaining??0,b.price))),stale:stale.length?true:stock.some(b=>!b.dateKnown||b.id.startsWith('adjustment:'))?null:false,turnoverDays:null,markupPercent:null,soldCostCents:0,revenueCents:0,datedCostCents:0,weightedDays:'0',incompleteDates:false,averageDailyQuantity:observationDays?exactSum(recent.map(s=>s.quantity))/observationDays:null,observationDays,leadTimeDays:p.replenishment?.leadTimeDays??null,reorderPointQuantity:null,recommendedOrderQuantity:null};
+  const sold=[...sales.values()].filter(s=>s.productId===p.id);m.soldCostCents=exactSum(sold.map(s=>s.cost??0));m.revenueCents=exactSum(sold.map(s=>s.revenue??0));products[p.id]=m;
+ }
+ for(const a of l.allocations){const s=sales.get(a.saleId);if(!s)continue;const b=batches.get(a.batchId),m=products[s.productId];if(!b||!b.dateKnown||b.id.startsWith('adjustment:')){m.incompleteDates=true;continue;}m.datedCostCents=exactSum([m.datedCostCents,a.cost]);m.weightedDays=String(BigInt(m.weightedDays)+BigInt(a.cost)*BigInt(days(b.date,s.date)));}
+ Object.values(products).forEach(finish);
+ const groups=[...new Set(l.products.map(p=>p.category))].map(name=>{
+  const members=l.products.filter(p=>p.category===name).map(p=>products[p.id]);
+  const m:InventoryMetrics={...members[0],stockCents:exactSum(members.map(m=>m.stockCents)),staleCents:exactSum(members.map(m=>m.staleCents)),stale:members.some(m=>m.stale===true)?true:members.some(m=>m.stale===null)?null:false,soldCostCents:exactSum(members.map(m=>m.soldCostCents)),revenueCents:exactSum(members.map(m=>m.revenueCents)),datedCostCents:exactSum(members.map(m=>m.datedCostCents)),weightedDays:String(members.reduce((n,m)=>n+BigInt(m.weightedDays),0n)),incompleteDates:members.some(m=>m.incompleteDates),averageDailyQuantity:null,observationDays:0,leadTimeDays:null};finish(m);return {name,metrics:m};
+ });
+ return {products,groups,from,to:end,stockAsOf:now};
+}
+
 export function mutate(original:Ledger, input:Record<string,unknown>):Ledger {
  const l=structuredClone(original), kind=textValue(input.kind,true), id=textValue(input.id)||crypto.randomUUID(),createdAt=new Date(Math.max(Date.now(),...([...l.batches,...l.sales,...l.adjustments].map(e=>Date.parse(e.createdAt)+1)))).toISOString(), now=today(l.settings.timezone);
  let p=l.products.find(p=>p.id===input.productId);
@@ -61,5 +101,16 @@ export function mutate(original:Ledger, input:Record<string,unknown>):Ledger {
  else if(kind==='deleteExpense'){l.expenses=l.expenses.filter(e=>e.id!==id);}
  else if(kind==='settings'){l.settings={name:textValue(input.name,true),owner:textValue(input.owner,true),staleDays:Number(input.staleDays),timezone:textValue(input.timezone,true)};if(!Number.isInteger(l.settings.staleDays)||l.settings.staleDays<1||l.settings.staleDays>365)throw Error('Порог: от 1 до 365 дней.');try{today(l.settings.timezone);}catch{throw Error('Неизвестный часовой пояс.');}}
  else throw Error('Неизвестная операция.');
+ if(kind==='product'){
+  const row=l.products.find(p=>p.id===id)!;
+  const old=original.products.find(p=>p.id===id);
+  row.replenishment=old?.replenishment;
+  if(input.leadTimeDays!==undefined||input.preferredSupplier!==undefined){
+   const raw=input.leadTimeDays??old?.replenishment?.leadTimeDays??'';
+   const leadTimeDays=raw===''?null:Number(raw);
+   if(leadTimeDays!==null&&(!Number.isInteger(leadTimeDays)||leadTimeDays<0||leadTimeDays>365))throw Error('Срок поставки: от 0 до 365 дней.');
+   row.replenishment={supplier:textValue(input.preferredSupplier??old?.replenishment?.supplier),leadTimeDays};
+  }
+ }
  calculate(l);return l;
 }

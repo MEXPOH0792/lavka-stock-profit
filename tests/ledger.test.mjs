@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyLedger,mutate,calculate,summary,fixed,cost,today,inventoryAnalytics} from '../lib/ledger.ts';
+import {createBackup,readBackup} from '../lib/backup.ts';
 function base(){return mutate(emptyLedger(),{kind:'product',id:'p',name:'Финики',unit:'kg',price:'700'});}
 function buy(l,q,p,d='2026-01-01'){return mutate(l,{kind:'purchase',productId:'p',quantity:q,price:p,date:d});}
 function sell(l,q,p='700',d='2026-01-03'){return mutate(l,{kind:'sale',productId:'p',quantity:q,price:p,date:d});}
@@ -52,3 +53,4 @@ test('invalid first operation does not leave a newly named product behind',()=>{
 test('opening stock can be edited together with its product',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',salePrice:'700',date:today()});l=mutate(l,{kind:'updateOpening',id:'opening',name:'Конфеты ассорти',category:'Сладости',unit:'kg',quantity:'6.5',price:'450',salePrice:'800',date:today(),dateKnown:false});const c=calculate(l);assert.equal(c.products[0].name,'Конфеты ассорти');assert.equal(c.products[0].price,80000);assert.equal(c.batches[0].quantity,6500);assert.equal(c.batches[0].price,45000);assert.equal(c.batches[0].dateKnown,false);});
 test('product and opening stock can be deleted before other movements',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=mutate(l,{kind:'deleteProduct',id:'p'});assert.equal(l.products.length,0);assert.equal(l.batches.length,0);});
 test('product with movement history cannot be edited as opening stock or deleted',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=sell(l,'1','700',today());assert.throws(()=>mutate(l,{kind:'updateOpening',id:'opening',name:'Другое',unit:'kg',quantity:'6',price:'450',date:today()}),/есть движения/);assert.throws(()=>mutate(l,{kind:'deleteProduct',id:'p'}),/Удалить товар с продажами/);assert.equal(l.products.length,1);assert.equal(l.batches.length,1);});
+test('backup round-trip preserves a valid ledger and rejects foreign files',()=>{const original=buy(base(),'2','300',today()),restored=readBackup(createBackup(original));assert.equal(restored.products[0].name,'Финики');assert.equal(restored.batches[0].quantity,2000);assert.throws(()=>readBackup('{"hello":"world"}'),/не файл/);});

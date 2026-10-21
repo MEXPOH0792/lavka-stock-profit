@@ -6,6 +6,31 @@ function base(){return mutate(emptyLedger(),{kind:'product',id:'p',name:'Фин�
 function buy(l,q,p,d='2026-01-01'){return mutate(l,{kind:'purchase',productId:'p',quantity:q,price:p,date:d});}
 function sell(l,q,p='700',d='2026-01-03'){return mutate(l,{kind:'sale',productId:'p',quantity:q,price:p,date:d});}
 
+test('shop choice preserves existing records and survives settings updates',()=>{
+ const original=buy(base(),'5','300');const selected=mutate(original,{kind:'shopType',shopType:'fashion'});
+ assert.deepEqual(selected.products,original.products);assert.deepEqual(selected.batches,original.batches);
+ const changed=mutate(selected,{kind:'settings',...selected.settings,name:'Обувь'});
+ assert.equal(changed.settings.shopType,'fashion');assert.throws(()=>mutate(changed,{kind:'shopType',shopType:'unknown'}));
+});
+test('sizes and colors keep separate stock; pairs cannot be fractional',()=>{
+ let l=mutate(emptyLedger(),{kind:'shopType',shopType:'fashion'});
+ for(const [size,color] of [['42','Чёрный'],['43','Чёрный'],['42','Белый']])l=mutate(l,{kind:'opening',productId:'__new__',newProductName:'Кроссовки',newProductUnit:'pair',newProductSize:size,newProductColor:color,newProductPrice:'3500',quantity:'3',price:'2100',date:'2026-01-01',dateKnown:false});
+ const p=l.products[0];l=mutate(l,{kind:'sale',productId:p.id,quantity:'1',price:'3500',date:'2026-01-02'});
+ assert.deepEqual(calculate(l).batches.map(b=>b.remaining),[2000,3000,3000]);
+ assert.equal(summary(l,'2026-01-01','2026-01-31').gross,140000);
+ assert.throws(()=>mutate(l,{kind:'sale',productId:p.id,quantity:'0.5',price:'3500',date:'2026-01-02'}));
+ const updated=mutate(l,{kind:'product',id:p.id,name:p.name,unit:'pair',price:'3600'});
+ assert.equal(updated.products.find(x=>x.id===p.id).size,'42');assert.equal(updated.products.find(x=>x.id===p.id).color,'Чёрный');
+ assert.throws(()=>mutate(l,{kind:'opening',productId:'__new__',newProductName:'кроссовки',newProductUnit:'pair',newProductSize:'42',newProductColor:'чёрный',quantity:'1',price:'2100',date:'2026-01-01'}),/уже есть/);
+ assert.equal(readBackup(createBackup(l)).products[0].unit,'pair');
+});
+test('food shop keeps fractional weights and opening edits keep variant fields',()=>{
+ let l=mutate(base(),{kind:'shopType',shopType:'food'});l=buy(l,'7.5','300');l=sell(l,'0.5','450');assert.equal(calculate(l).batches[0].remaining,7000);
+ let fashion=mutate(emptyLedger(),{kind:'opening',productId:'__new__',newProductName:'Футболка',newProductUnit:'pcs',newProductSize:'M',newProductColor:'Белый',quantity:'2',price:'300',date:'2026-01-01'});
+ fashion=mutate(fashion,{kind:'updateOpening',id:fashion.batches[0].id,name:'Футболка',unit:'pcs',quantity:'3',price:'300',date:'2026-01-01',salePrice:'600'});
+ assert.equal(fashion.products[0].size,'M');assert.equal(fashion.products[0].color,'Белый');
+});
+
 const metrics=l=>inventoryAnalytics(l,'2026-01-01','2026-01-31','2026-02-01');
 test('turnover weights actual FIFO cost; markup uses sales prices, not list price',()=>{
  let l=buy(buy(base(),'1','100'),'1','300','2026-01-06');l=sell(l,'2','400','2026-01-11');
@@ -40,7 +65,7 @@ test('money parser rejects floats, negatives, exponents and extra precision',()=
 test('fractional sales conserve every purchase cent',()=>{let l=buy(base(),'0.003','3.33');for(let n=0;n<3;n++)l=sell(l,'0.001','10');const c=calculate(l);assert.equal(c.sales.reduce((n,s)=>n+s.cost,0),cost(3,333));assert.equal(c.batches[0].remaining,0);});
 test('historical report reconstructs month-end remaining cost',()=>{let l=buy(base(),'10','400');l=sell(l,'2','700','2026-01-25');l=sell(l,'3','700','2026-02-01');const r=summary(l,'2026-01-01','2026-01-31');assert.equal(r.stock,320000);assert.equal(r.revenue,140000);assert.equal(r.purchased,400000);});
 test('backdated sale before stock existed is rejected',()=>{const l=buy(base(),'10','400','2026-01-05');assert.throws(()=>sell(l,'1','700','2026-01-01'),/Недостаточно/);});
-test('whole pieces required',()=>{let l=mutate(emptyLedger(),{kind:'product',id:'p',name:'Штучный',unit:'pcs'});assert.throws(()=>buy(l,'0.5','100'),/целыми/);l=buy(l,'5','100');assert.throws(()=>sell(l,'1.5'),/целыми/);});
+test('whole pieces required',()=>{let l=mutate(emptyLedger(),{kind:'product',id:'p',name:'Штучный',unit:'pcs'});assert.throws(()=>buy(l,'0.5','100'),/целое количество/);l=buy(l,'5','100');assert.throws(()=>sell(l,'1.5'),/целое количество/);});
 test('weighing reduces FIFO, zero is valid and history retained',()=>{let l=buy(base(),'10','400');l=mutate(l,{kind:'adjustment',productId:'p',quantity:'8',reason:'Взвешивание'});let c=calculate(l);assert.equal(c.adjustments[0].difference,-2000);assert.equal(c.adjustments[0].loss,80000);l=mutate(l,{kind:'adjustment',productId:'p',quantity:'0',reason:'Списание'});assert.equal(calculate(l).batches[0].remaining,0);});
 test('surplus requires cost and creates an identifiable batch',()=>{let l=buy(base(),'10','400');assert.throws(()=>mutate(l,{kind:'adjustment',productId:'p',quantity:'12',reason:'Инвентаризация'}));l=mutate(l,{kind:'adjustment',productId:'p',quantity:'12',price:'450',reason:'Инвентаризация'});assert.equal(calculate(l).batches[1].remaining,2000);});
 test('opening balances excluded from purchase totals',()=>{const l=mutate(base(),{kind:'opening',productId:'p',quantity:'10',price:'400',date:today(),dateKnown:false});assert.equal(summary(l,'2000-01-01','2100-01-01').purchased,0);assert.equal(calculate(l).batches[0].dateKnown,false);});
@@ -49,7 +74,7 @@ test('recurring expense cannot duplicate current month',()=>{const l=mutate(base
 test('impossible calendar dates rejected',()=>{assert.throws(()=>buy(base(),'1','10','2026-02-30'),/корректную дату/);});
 test('monotonic event ordering handles same-day transactions',()=>{let l=buy(base(),'1','10',today());for(let i=0;i<10;i++)l=sell(l,'0.1','20',today());assert.equal(calculate(l).batches[0].remaining,0);});
 test('purchase can atomically create a product with a custom name',()=>{const l=mutate(emptyLedger(),{kind:'purchase',productId:'__new__',newProductName:'Манго без сахара',newProductCategory:'Сухофрукты',newProductUnit:'kg',newProductPrice:'850',quantity:'3.5',price:'500',date:today()});assert.equal(l.products.length,1);assert.equal(l.products[0].name,'Манго без сахара');assert.equal(l.products[0].price,85000);assert.equal(l.batches[0].productId,l.products[0].id);assert.equal(calculate(l).batches[0].remaining,3500);});
-test('invalid first operation does not leave a newly named product behind',()=>{const l=emptyLedger();assert.throws(()=>mutate(l,{kind:'purchase',productId:'__new__',newProductName:'Новый товар',newProductUnit:'pcs',quantity:'1.5',price:'100',date:today()}),/целыми/);assert.equal(l.products.length,0);});
+test('invalid first operation does not leave a newly named product behind',()=>{const l=emptyLedger();assert.throws(()=>mutate(l,{kind:'purchase',productId:'__new__',newProductName:'Новый товар',newProductUnit:'pcs',quantity:'1.5',price:'100',date:today()}),/целое количество/);assert.equal(l.products.length,0);});
 test('opening stock can be edited together with its product',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',salePrice:'700',date:today()});l=mutate(l,{kind:'updateOpening',id:'opening',name:'Конфеты ассорти',category:'Сладости',unit:'kg',quantity:'6.5',price:'450',salePrice:'800',date:today(),dateKnown:false});const c=calculate(l);assert.equal(c.products[0].name,'Конфеты ассорти');assert.equal(c.products[0].price,80000);assert.equal(c.batches[0].quantity,6500);assert.equal(c.batches[0].price,45000);assert.equal(c.batches[0].dateKnown,false);});
 test('product and opening stock can be deleted before other movements',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=mutate(l,{kind:'deleteProduct',id:'p'});assert.equal(l.products.length,0);assert.equal(l.batches.length,0);});
 test('product with movement history cannot be edited as opening stock or deleted',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=sell(l,'1','700',today());assert.throws(()=>mutate(l,{kind:'updateOpening',id:'opening',name:'Другое',unit:'kg',quantity:'6',price:'450',date:today()}),/есть движения/);assert.throws(()=>mutate(l,{kind:'deleteProduct',id:'p'}),/Удалить товар с продажами/);assert.equal(l.products.length,1);assert.equal(l.batches.length,1);});

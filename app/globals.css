@@ -19,3 +19,4 @@
 @media(max-width:720px){.period-row{align-items:stretch;flex-direction:column}.month input{width:100%;max-width:none}.segmented{width:100%}.segmented button{flex:1}.demo-banner span{min-width:0;max-width:none}.demo-banner button{flex:none}}
 
 .turnover-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;padding:20px}.turnover-grid b{display:block;margin-top:6px;font-size:19px;font-variant-numeric:tabular-nums}.turnover-grid .badge{margin-top:8px}@media(max-width:720px){.turnover-grid{grid-template-columns:1fr 1fr;gap:16px;padding:16px}.turnover-grid b{font-size:16px}}
+.danger-panel{border-color:#ebceca}.danger-panel .panel-head{background:#fff9f8}.danger-panel .danger-button{margin:22px;color:#9f352f;border-color:#dca9a4;background:#fff}.danger-panel .danger-button:hover{background:#fff0ee}@media(max-width:720px){.danger-panel .danger-button{width:calc(100% - 32px);margin:18px 16px;min-height:48px}}

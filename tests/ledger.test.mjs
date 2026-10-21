@@ -75,6 +75,24 @@ test('impossible calendar dates rejected',()=>{assert.throws(()=>buy(base(),'1',
 test('monotonic event ordering handles same-day transactions',()=>{let l=buy(base(),'1','10',today());for(let i=0;i<10;i++)l=sell(l,'0.1','20',today());assert.equal(calculate(l).batches[0].remaining,0);});
 test('purchase can atomically create a product with a custom name',()=>{const l=mutate(emptyLedger(),{kind:'purchase',productId:'__new__',newProductName:'Манго без сахара',newProductCategory:'Сухофрукты',newProductUnit:'kg',newProductPrice:'850',quantity:'3.5',price:'500',date:today()});assert.equal(l.products.length,1);assert.equal(l.products[0].name,'Манго без сахара');assert.equal(l.products[0].price,85000);assert.equal(l.batches[0].productId,l.products[0].id);assert.equal(calculate(l).batches[0].remaining,3500);});
 test('invalid first operation does not leave a newly named product behind',()=>{const l=emptyLedger();assert.throws(()=>mutate(l,{kind:'purchase',productId:'__new__',newProductName:'Новый товар',newProductUnit:'pcs',quantity:'1.5',price:'100',date:today()}),/целое количество/);assert.equal(l.products.length,0);});
+
+test('shop type allows only matching units',()=>{
+ const fashion=mutate(emptyLedger(),{kind:'shopType',shopType:'fashion'});
+ assert.throws(()=>mutate(fashion,{kind:'opening',productId:'__new__',newProductName:'Куртка',newProductUnit:'kg',quantity:'1',price:'1000',date:today()}),/штуки или пары/);
+ const food=mutate(emptyLedger(),{kind:'shopType',shopType:'food'});
+ assert.throws(()=>mutate(food,{kind:'opening',productId:'__new__',newProductName:'Курага',newProductUnit:'pair',quantity:'1',price:'500',date:today()}),/килограммы или штуки/);
+});
+
+test('filled shop cannot switch template until reset',()=>{
+ let l=mutate(emptyLedger(),{kind:'shopType',shopType:'fashion'});
+ l=mutate(l,{kind:'opening',productId:'__new__',newProductName:'Кроссовки',newProductCategory:'Обувь',newProductUnit:'pair',quantity:'1',price:'2000',date:today()});
+ assert.throws(()=>mutate(l,{kind:'shopType',shopType:'food'}),/сначала удалите все данные/);
+ l=mutate(l,{kind:'reset'});
+ assert.equal(l.products.length,0);
+ assert.equal(l.batches.length,0);
+ assert.equal(l.settings.shopType,undefined);
+ assert.equal(l.categories.length,0);
+});
 test('opening stock can be edited together with its product',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',salePrice:'700',date:today()});l=mutate(l,{kind:'updateOpening',id:'opening',name:'Конфеты ассорти',category:'Сладости',unit:'kg',quantity:'6.5',price:'450',salePrice:'800',date:today(),dateKnown:false});const c=calculate(l);assert.equal(c.products[0].name,'Конфеты ассорти');assert.equal(c.products[0].price,80000);assert.equal(c.batches[0].quantity,6500);assert.equal(c.batches[0].price,45000);assert.equal(c.batches[0].dateKnown,false);});
 test('product and opening stock can be deleted before other movements',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=mutate(l,{kind:'deleteProduct',id:'p'});assert.equal(l.products.length,0);assert.equal(l.batches.length,0);});
 test('product with movement history cannot be edited as opening stock or deleted',()=>{let l=mutate(base(),{kind:'opening',id:'opening',productId:'p',quantity:'5',price:'400',date:today()});l=sell(l,'1','700',today());assert.throws(()=>mutate(l,{kind:'updateOpening',id:'opening',name:'Другое',unit:'kg',quantity:'6',price:'450',date:today()}),/есть движения/);assert.throws(()=>mutate(l,{kind:'deleteProduct',id:'p'}),/Удалить товар с продажами/);assert.equal(l.products.length,1);assert.equal(l.batches.length,1);});
